@@ -1,3 +1,5 @@
+FORK of last upstream release of the `expo-in-app-purchases` module, which was deprecated by Expo.
+
 # expo-in-app-purchases
 
 `expo-in-app-purchases` allows you to accept payments for in-app products.
