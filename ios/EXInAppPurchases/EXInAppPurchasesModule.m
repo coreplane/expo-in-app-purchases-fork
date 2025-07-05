@@ -4,8 +4,6 @@
 
 @interface EXInAppPurchasesModule ()
 
-@property (weak, nonatomic) EXModuleRegistry *moduleRegistry;
-@property (nonatomic, weak) id <EXEventEmitterService> eventEmitter;
 @property (strong, nonatomic) NSMutableDictionary *promises;
 @property (strong, nonatomic) NSMutableDictionary *pendingTransactions;
 @property (strong, nonatomic) NSMutableSet<SKProduct *> *cachedProducts;
@@ -25,13 +23,7 @@ static const int DEFERRED = 3;
 
 @implementation EXInAppPurchasesModule
 
-EX_EXPORT_MODULE(ExpoInAppPurchases);
-
-- (void)setModuleRegistry:(EXModuleRegistry *)moduleRegistry
-{
-  _moduleRegistry = moduleRegistry;
-  _eventEmitter = [moduleRegistry getModuleImplementingProtocol:@protocol(EXEventEmitterService)];
-}
+RCT_EXPORT_MODULE(ExpoInAppPurchases);
 
 - (NSArray<NSString *> *)supportedEvents
 {
@@ -43,34 +35,25 @@ EX_EXPORT_MODULE(ExpoInAppPurchases);
 
 # pragma mark - Exported Methods
 
-EX_EXPORT_METHOD_AS(connectAsync,
-                    connectAsync:(EXPromiseResolveBlock)resolve
-                    reject:(EXPromiseRejectBlock)reject)
+RCT_EXPORT_METHOD(connectAsync:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 {
   // Initialize listener and object properties
   [[SKPaymentQueue defaultQueue] addTransactionObserver:self];
-  
+
   _promises = [NSMutableDictionary dictionary];
   _pendingTransactions = [NSMutableDictionary dictionary];
   _cachedProducts = [NSMutableSet set];
-  
+
   resolve(nil);
 }
 
-EX_EXPORT_METHOD_AS(getProductsAsync,
-                    getProductsAsync:(NSArray *)productIDs
-                    resolve:(EXPromiseResolveBlock)resolve
-                    reject:(EXPromiseRejectBlock)reject)
+RCT_EXPORT_METHOD(getProductsAsync:(NSArray *)productIDs resolve:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 {
   [self setPromise:kEXQueryPurchasableKey resolve:resolve reject:reject];
   [self requestProducts:productIDs];
 }
 
-EX_EXPORT_METHOD_AS(purchaseItemAsync,
-                    purchaseItemAsync:(NSString *)productIdToPurchase
-                    replace:(NSDictionary *)details // ignore on iOS
-                    resolve:(EXPromiseResolveBlock)resolve
-                    reject:(EXPromiseRejectBlock)reject)
+RCT_EXPORT_METHOD(purchaseItemAsync:(NSString *)productIdToPurchase replace:(NSDictionary *)details resolve:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 {
   if (![SKPaymentQueue canMakePayments]) {
     reject(@"E_MISSING_PERMISSIONS", @"User cannot make payments", nil);
@@ -87,14 +70,11 @@ EX_EXPORT_METHOD_AS(purchaseItemAsync,
       return;
     }
   }
-  
+
   reject(@"E_ITEM_NOT_QUERIED", @"Must query item from store before calling purchase", nil);
 }
 
-EX_EXPORT_METHOD_AS(finishTransactionAsync,
-                    finishTransactionAsync:(NSString *)transactionId
-                    resolve:(EXPromiseResolveBlock)resolve
-                    reject:(EXPromiseRejectBlock)reject)
+RCT_EXPORT_METHOD(finishTransactionAsync:(NSString *)transactionId resolve:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 {
   SKPaymentTransaction *transaction = _pendingTransactions[transactionId];
   _pendingTransactions[transactionId] = nil;
@@ -104,21 +84,17 @@ EX_EXPORT_METHOD_AS(finishTransactionAsync,
   resolve(nil);
 }
 
-EX_EXPORT_METHOD_AS(getPurchaseHistoryAsync,
-                    getPurchaseHistoryAsync:(EXPromiseResolveBlock)resolve
-                    reject:(EXPromiseRejectBlock)reject)
+RCT_EXPORT_METHOD(getPurchaseHistoryAsync:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 {
   BOOL promiseSet = [self setPromise:kEXQueryHistoryKey resolve:resolve reject:reject];
-  
+
   if (promiseSet) {
     // Request history
     [[SKPaymentQueue defaultQueue] restoreCompletedTransactions];
   }
 }
 
-EX_EXPORT_METHOD_AS(disconnectAsync,
-                    disconnectAsync:(EXPromiseResolveBlock)resolve
-                    reject:(EXPromiseRejectBlock)reject)
+RCT_EXPORT_METHOD(disconnectAsync:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 {
   [[SKPaymentQueue defaultQueue] removeTransactionObserver:self];
   resolve(nil);
@@ -132,10 +108,10 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
                                         initWithProductIdentifiers:[NSSet setWithArray:productIdentifiers]];
   // Keep a strong reference to the request
   _request = productsRequest;
-  
+
   // Here we are the delegate since this class also implements SKProductsRequestDelegate
   productsRequest.delegate = self;
-  
+
   // This will return in the productsRequest method below
   [productsRequest start];
 }
@@ -159,7 +135,7 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
     NSDictionary *productData = [self getProductData:validProduct];
     [result addObject:productData];
   }
-  
+
   NSDictionary *res = [self formatResults:result withResponseCode:OK];
   [self resolvePromise:kEXQueryPurchasableKey value:res];
 }
@@ -167,17 +143,17 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
 - (void)paymentQueueRestoreCompletedTransactionsFinished:(SKPaymentQueue *)queue
 {
   NSMutableArray *results = [NSMutableArray array];
-  
+
   for (SKPaymentTransaction *transaction in queue.transactions) {
     SKPaymentTransactionState transactionState = transaction.transactionState;
     if (transactionState == SKPaymentTransactionStateRestored || transactionState == SKPaymentTransactionStatePurchased) {
       NSDictionary * transactionData = [self getTransactionData:transaction acknowledged:YES];
       [results addObject:transactionData];
-      
+
       [[SKPaymentQueue defaultQueue] finishTransaction:transaction];
     }
   }
-  
+
   NSDictionary *response = [self formatResults:results withResponseCode:OK];
   [self resolvePromise:kEXQueryHistoryKey value:response];
 }
@@ -201,12 +177,12 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
       case SKPaymentTransactionStatePurchased: {
         // Save transaction to be finished later
         _pendingTransactions[transaction.transactionIdentifier] = transaction;
-        
+
         // Emit results
         NSArray *results = @[[self getTransactionData:transaction acknowledged:NO]];
         NSDictionary *response = [self formatResults:results withResponseCode:OK];
-        [_eventEmitter sendEventWithName:kEXPurchasesUpdatedEventName body:response];
-        
+        [self sendEventWithName:kEXPurchasesUpdatedEventName body:response];
+
         // Resolve promise
         [self resolvePromise:transaction.payment.productIdentifier value:nil];
         break;
@@ -220,8 +196,8 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
         // Emit results with deferred response code
         NSArray *results = @[[self getTransactionData:transaction acknowledged:NO]];
         NSDictionary *response = [self formatResults:results withResponseCode:DEFERRED];
-        [_eventEmitter sendEventWithName:kEXPurchasesUpdatedEventName body:response];
-        
+        [self sendEventWithName:kEXPurchasesUpdatedEventName body:response];
+
         // Resolve promise
         [self resolvePromise:transaction.payment.productIdentifier value:nil];
         break;
@@ -230,12 +206,12 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
         // Emit results
         if (transaction.error.code == SKErrorPaymentCancelled){
           NSDictionary *response = [self formatResults:@[] withResponseCode:USER_CANCELED];
-          [_eventEmitter sendEventWithName:kEXPurchasesUpdatedEventName body:response];
+          [self sendEventWithName:kEXPurchasesUpdatedEventName body:response];
         } else {
           NSDictionary *response = [self formatResults:transaction.error.code];
-          [_eventEmitter sendEventWithName:kEXPurchasesUpdatedEventName body:response];
+          [self sendEventWithName:kEXPurchasesUpdatedEventName body:response];
         }
-        
+
         // Finish transaction and resolve promise
         [[SKPaymentQueue defaultQueue] finishTransaction:transaction];
         [self resolvePromise:transaction.payment.productIdentifier value:nil];
@@ -248,10 +224,10 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
 # pragma mark - Handling Promises
 
 // Returns a boolean indicating the promise was successfully set. Otherwise, we should return immediately
-- (BOOL)setPromise:(NSString*)key resolve:(EXPromiseResolveBlock)resolve reject:(EXPromiseRejectBlock)reject
+- (BOOL)setPromise:(NSString*)key resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject
 {
   NSArray *promise = _promises[key];
-  
+
   if (promise == nil) {
     _promises[key] = @[resolve, reject];
     return YES;
@@ -264,11 +240,11 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
 - (void)resolvePromise:(NSString*)key value:(id)value
 {
   NSArray *currentPromise = _promises[key];
-  
+
   if (currentPromise != nil) {
-    EXPromiseResolveBlock resolve = currentPromise[0];
+    RCTPromiseResolveBlock resolve = currentPromise[0];
     _promises[key] = nil;
-    
+
     resolve(value);
   }
 }
@@ -276,11 +252,11 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
 - (void)rejectPromise:(NSString*)key code:(NSString*)code message:(NSString*)message error:(NSError*) error
 {
   NSArray* currentPromise = _promises[key];
-  
+
   if (currentPromise != nil) {
-    EXPromiseRejectBlock reject = currentPromise[1];
+    RCTPromiseRejectBlock reject = currentPromise[1];
     _promises[key] = nil;
-    
+
     reject(code, message, error);
   }
 }
@@ -292,17 +268,17 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
   // Use with caution: P0D also implies non-renewable subscription.
   NSString *subscriptionPeriod = [self getSubscriptionPeriod:product];
   NSNumber *type = [subscriptionPeriod isEqualToString:kEXInAppSubPeriod] ? @(0) : @(1);
-  
+
   NSDecimalNumber *oneMillion = [[NSDecimalNumber alloc] initWithInt:1000000];
   NSDecimalNumber *priceAmountMicros = [product.price decimalNumberByMultiplyingBy:oneMillion];
   NSString *description = product.localizedDescription ?: @"";
   NSString *title = product.localizedTitle ?: @"";
-  
+
   NSNumberFormatter *priceFormatter = [[NSNumberFormatter alloc] init];
   priceFormatter.numberStyle = NSNumberFormatterCurrencyStyle;
   priceFormatter.locale = product.priceLocale;
   NSString *price = [priceFormatter stringFromNumber:product.price];
-  
+
   return @{
            @"description": description,
            @"price": price,
@@ -318,13 +294,13 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
 - (NSDictionary *)getTransactionData:(SKPaymentTransaction *)transaction acknowledged:(BOOL)acknowledged
 {
   NSData *receiptData = [NSData dataWithContentsOfURL:[[NSBundle mainBundle] appStoreReceiptURL]];
-  
+
   // Get original transaction info if any
   SKPaymentTransaction *originalTransaction = transaction.originalTransaction;
   NSString *originalTransactionId = originalTransaction ? originalTransaction.transactionIdentifier : NSString.string;
   NSNumber *originalTransactionTime = originalTransaction ?
   @(originalTransaction.transactionDate.timeIntervalSince1970 * 1000) : @(0);
-  
+
   return @{
            @"acknowledged": @(acknowledged),
            @"productId": transaction.payment.productIdentifier,
@@ -345,7 +321,7 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
     unsigned long numUnits = (unsigned long)product.subscriptionPeriod.numberOfUnits;
     return [NSString stringWithFormat:@"P%lu%@", numUnits, unit];
   }
-  
+
   // Default to P0D if we can't get this info so we assume all products are in app
   return kEXInAppSubPeriod;
 }
