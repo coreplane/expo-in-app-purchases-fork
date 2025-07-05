@@ -1,2 +1,2 @@
-import { requireNativeModule } from 'expo-modules-core';
-export default requireNativeModule('ExpoInAppPurchases');
+import { NativeModules } from 'react-native';
+export default NativeModules.ExpoInAppPurchases;

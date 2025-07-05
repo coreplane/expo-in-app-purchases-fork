@@ -1,31 +1,33 @@
 package expo.modules.inapppurchases;
 
 import java.util.List;
+import java.util.ArrayList;
+
+import androidx.annotation.Nullable;
 
 import android.content.Context;
 import android.app.Activity;
 import android.util.Log;
 
-import expo.modules.core.ExportedModule;
-import expo.modules.core.ModuleRegistry;
-import expo.modules.core.Promise;
-import expo.modules.core.arguments.ReadableArguments;
-import expo.modules.core.interfaces.ExpoMethod;
-import expo.modules.core.interfaces.ActivityProvider;
-import expo.modules.core.interfaces.RegistryLifecycleListener;
-import expo.modules.core.interfaces.services.EventEmitter;
+import com.facebook.react.bridge.ReactContextBaseJavaModule;
+import com.facebook.react.bridge.ReactApplicationContext;
+import com.facebook.react.bridge.ReactMethod;
+import com.facebook.react.bridge.Promise;
+import com.facebook.react.bridge.ReadableArray;
+import com.facebook.react.bridge.ReadableMap;
+import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.module.annotations.ReactModule;
+import com.facebook.react.modules.core.DeviceEventManagerModule;
 
-public class InAppPurchasesModule extends ExportedModule implements RegistryLifecycleListener {
+@ReactModule(name = InAppPurchasesModule.NAME)
+public class InAppPurchasesModule extends ReactContextBaseJavaModule {
   private static final String TAG = InAppPurchasesModule.class.getSimpleName();
-  private static final String NAME = "ExpoInAppPurchases";
-  private final String USE_GOOGLE_PLAY_CACHE_KEY = "useGooglePlayCache";
+  public static final String NAME = "ExpoInAppPurchases";
 
   private BillingManager mBillingManager;
-  private ModuleRegistry mModuleRegistry;
-  private EventEmitter mEventEmitter;
 
-  public InAppPurchasesModule(Context context) {
-    super(context);
+  public InAppPurchasesModule(ReactApplicationContext reactContext) {
+    super(reactContext);
   }
 
   @Override
@@ -33,47 +35,41 @@ public class InAppPurchasesModule extends ExportedModule implements RegistryLife
     return NAME;
   }
 
-  @Override
-  public void onCreate(ModuleRegistry moduleRegistry) {
-    mModuleRegistry = moduleRegistry;
-  }
-
-  @ExpoMethod
+  @ReactMethod
   public void connectAsync(final Promise promise) {
     Activity activity = getCurrentActivity();
     if (activity == null) {
       promise.reject("E_ACTIVITY_UNAVAILABLE", "Activity is not available");
     }
-    mEventEmitter = mModuleRegistry.getModule(EventEmitter.class);
-    mBillingManager = new BillingManager(activity, mEventEmitter);
+    mBillingManager = new BillingManager(activity, this);
     mBillingManager.startConnection(promise);
   }
 
-  @ExpoMethod
-  public void getProductsAsync(List<String> itemList, final Promise promise) {
+  @ReactMethod
+  public void getProductsAsync(ReadableArray itemListArray, final Promise promise) {
+    List<String> itemList = new ArrayList<>();
+    for(int i = 0; i < itemListArray.size(); i++) {
+      itemList.add(itemListArray.getString(i));
+    }
     mBillingManager.queryPurchasableItems(itemList, promise);
   }
 
-  @ExpoMethod
-  public void getPurchaseHistoryAsync(final ReadableArguments options, final Promise promise) {
-    if (options.getBoolean(USE_GOOGLE_PLAY_CACHE_KEY, true)) {
-      mBillingManager.queryPurchases(promise);
-    } else {
-      mBillingManager.queryPurchaseHistoryAsync(promise);
-    }
+  @ReactMethod
+  public void getPurchaseHistoryAsync(final ReadableMap options, final Promise promise) {
+    mBillingManager.queryPurchases(promise);
   }
 
-  @ExpoMethod
-  public void purchaseItemAsync(String skuId, ReadableArguments details, final Promise promise) {
+  @ReactMethod
+  public void purchaseItemAsync(String skuId, ReadableMap details, final Promise promise) {
     mBillingManager.purchaseItemAsync(skuId, details, promise);
   }
 
-  @ExpoMethod
+  @ReactMethod
   public void getBillingResponseCodeAsync(final Promise promise) {
     promise.resolve(mBillingManager.getBillingClientResponseCode());
   }
 
-  @ExpoMethod
+  @ReactMethod
   public void finishTransactionAsync(String purchaseToken, Boolean consume, final Promise promise) {
     if (consume != null && consume) {
       mBillingManager.consumeAsync(purchaseToken, promise);
@@ -82,7 +78,7 @@ public class InAppPurchasesModule extends ExportedModule implements RegistryLife
     }
   }
 
-  @ExpoMethod
+  @ReactMethod
   public void disconnectAsync(final Promise promise) {
     if (mBillingManager != null) {
       mBillingManager.destroy();
@@ -91,8 +87,8 @@ public class InAppPurchasesModule extends ExportedModule implements RegistryLife
     promise.resolve(null);
   }
 
-  private Activity getCurrentActivity() {
-    ActivityProvider activityProvider = mModuleRegistry.getModule(ActivityProvider.class);
-    return activityProvider != null ? activityProvider.getCurrentActivity() : null;
+  public void emit(String eventName, @Nullable WritableMap params) {
+    Log.d(TAG, "emit " + eventName + " " + params);
+    getReactApplicationContext().getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class).emit(eventName, params);
   }
 }

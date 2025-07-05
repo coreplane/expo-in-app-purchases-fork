@@ -1,9 +1,9 @@
 {
   "name": "expo-in-app-purchases",
-  "version": "14.6.0",
-  "description": "Expo unimodule for accepting in-app purchases",
-  "main": "build/InAppPurchases.js",
-  "types": "build/InAppPurchases.d.ts",
+  "version": "15.0.0",
+  "description": "Expo unimodule for accepting in-app purchases. CorePlane forked version.",
+  "main": "src/InAppPurchases.ts",
+  "types": "src/InAppPurchases.ts",
   "scripts": {
     "build": "expo-module build",
     "clean": "expo-module clean",
@@ -20,11 +20,8 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/expo/expo.git",
-    "directory": "packages/expo-in-app-purchases"
-  },
-  "bugs": {
-    "url": "https://github.com/expo/expo/issues"
+    "url": "https://github.com/coreplane/expo-in-app-purchases-fork.git",
+    "directory": ""
   },
   "author": "650 Industries, Inc.",
   "license": "MIT",

@@ -3,24 +3,25 @@ package expo.modules.inapppurchases;
 import java.util.ArrayList;
 import java.util.List;
 
-import android.os.Bundle;
-
 import com.android.billingclient.api.BillingResult;
 import com.android.billingclient.api.BillingClient.BillingResponseCode;
 import com.android.billingclient.api.Purchase;
 
-import expo.modules.core.interfaces.services.EventEmitter;
-import expo.modules.core.Promise;
+import com.facebook.react.bridge.Promise;
+import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.bridge.WritableArray;
+import com.facebook.react.bridge.WritableNativeMap;
+import com.facebook.react.bridge.WritableNativeArray;
 
 /**
  * Handler to billing updates
  */
 public class UpdateListener implements BillingManager.BillingUpdatesListener {
   private static final String TAG = "UpdateListener";
-  private EventEmitter mEventEmitter;
+  private InAppPurchasesModule mInAppPurchasesModule;
 
-  public UpdateListener(EventEmitter eventEmitter) {
-    mEventEmitter = eventEmitter;
+  public UpdateListener(InAppPurchasesModule inAppPurchasesModule) {
+    mInAppPurchasesModule = inAppPurchasesModule;
   }
 
   @Override
@@ -29,7 +30,7 @@ public class UpdateListener implements BillingManager.BillingUpdatesListener {
 
   @Override
   public void onConsumeFinished(String token, BillingResult result) {
-    Bundle response = new Bundle();
+    WritableNativeMap response = new WritableNativeMap();
     response.putInt("responseCode", result.getResponseCode());
     response.putString("token", token);
 
@@ -42,14 +43,14 @@ public class UpdateListener implements BillingManager.BillingUpdatesListener {
 
   @Override
   public void onPurchasesUpdated(List<Purchase> purchaseList) {
-    Bundle response = new Bundle();
-    ArrayList<Bundle> results = new ArrayList<>();
+    WritableNativeMap response = new WritableNativeMap();
+    WritableNativeArray results = new WritableNativeArray();
     for (Purchase purchase : purchaseList) {
-      results.add(BillingManager.purchaseToBundle(purchase));
+      results.pushMap(BillingManager.purchaseToWritableMap(purchase));
     }
-    response.putParcelableArrayList("results", results);
+    response.putArray("results", results);
     response.putInt("responseCode", BillingResponseCode.OK);
 
-    mEventEmitter.emit(BillingManager.PURCHASES_UPDATED_EVENT, response);
+    mInAppPurchasesModule.emit(BillingManager.PURCHASES_UPDATED_EVENT, response);
   }
 }

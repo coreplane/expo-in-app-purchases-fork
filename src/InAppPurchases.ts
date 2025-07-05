@@ -1,5 +1,5 @@
-import { CodedError, EventEmitter, Subscription } from 'expo-modules-core';
-import { Platform } from 'react-native';
+import { CodedError, Subscription } from 'expo-modules-core';
+import { Platform, NativeEventEmitter } from 'react-native';
 
 import ExpoInAppPurchases from './ExpoInAppPurchases';
 import {
@@ -15,7 +15,7 @@ import {
   IAPPurchaseItemOptions,
 } from './InAppPurchases.types';
 
-export {
+export type {
   InAppPurchase,
   InAppPurchaseState,
   IAPResponseCode,
@@ -35,7 +35,7 @@ const errors = {
 };
 
 const PURCHASES_UPDATED_EVENT = 'Expo.purchasesUpdated';
-const eventEmitter = new EventEmitter(ExpoInAppPurchases);
+const eventEmitter = new NativeEventEmitter(ExpoInAppPurchases);
 
 let connected = false;
 let purchaseUpdatedSubscription: Subscription;
@@ -228,7 +228,7 @@ export function setPurchaseListener(
     purchaseUpdatedSubscription.remove();
   }
 
-  purchaseUpdatedSubscription = eventEmitter.addListener<IAPQueryResponse<InAppPurchase>>(
+  purchaseUpdatedSubscription = eventEmitter.addListener(
     PURCHASES_UPDATED_EVENT,
     (result) => {
       callback(result);

@@ -183,7 +183,7 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
 }
 
 - (void)paymentQueue:(SKPaymentQueue *)queue restoreCompletedTransactionsFailedWithError:(NSError *)error {
-  NSDictionary *response = [self formatResults:error.code];
+  NSDictionary *response = [self formatResultsVerbose:error];
   [self resolvePromise:kEXQueryHistoryKey value:response];
 }
 
@@ -386,6 +386,19 @@ EX_EXPORT_METHOD_AS(disconnectAsync,
            @"results": @[],
            @"responseCode": @(ERROR),
            @"errorCode": @(convertedErrorCode),
+           };
+}
+
+- (NSDictionary *)formatResultsVerbose:(NSError *)error
+{
+  SKErrorCode errorCode = error.code;
+  int convertedErrorCode = [self errorCodeNativeToJS:errorCode];
+  return @{
+           @"results": @[],
+           @"responseCode": @(ERROR),
+           @"errorCode": @(convertedErrorCode),
+           @"iosErrorCode": @(error.code),
+           @"errorDescription": [error.localizedDescription copy],
            };
 }
 

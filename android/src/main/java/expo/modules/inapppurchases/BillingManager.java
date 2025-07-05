@@ -2,32 +2,30 @@ package expo.modules.inapppurchases;
 
 import android.app.Activity;
 import android.content.Context;
-import android.os.Bundle;
-import android.os.Parcelable;
 import android.util.Log;
 
 import com.android.billingclient.api.AcknowledgePurchaseParams;
 import com.android.billingclient.api.AcknowledgePurchaseResponseListener;
 import com.android.billingclient.api.BillingClient;
 import com.android.billingclient.api.BillingClient.BillingResponseCode;
-import com.android.billingclient.api.BillingClient.FeatureType;
-import com.android.billingclient.api.BillingClient.SkuType;
+import com.android.billingclient.api.BillingClient.ProductType;
 import com.android.billingclient.api.BillingClientStateListener;
 import com.android.billingclient.api.BillingFlowParams;
 import com.android.billingclient.api.BillingResult;
 import com.android.billingclient.api.ConsumeParams;
 import com.android.billingclient.api.ConsumeResponseListener;
+import com.android.billingclient.api.PendingPurchasesParams;
 import com.android.billingclient.api.Purchase;
-import com.android.billingclient.api.PurchaseHistoryRecord;
-import com.android.billingclient.api.PurchaseHistoryResponseListener;
 import com.android.billingclient.api.PurchasesResponseListener;
 import com.android.billingclient.api.PurchasesUpdatedListener;
-import com.android.billingclient.api.SkuDetails;
-import com.android.billingclient.api.SkuDetailsParams;
-import com.android.billingclient.api.SkuDetailsResponseListener;
+import com.android.billingclient.api.ProductDetails;
+import com.android.billingclient.api.ProductDetailsResponseListener;
+import com.android.billingclient.api.QueryProductDetailsParams;
+import com.android.billingclient.api.QueryProductDetailsResult;
+import com.android.billingclient.api.QueryPurchasesParams;
+import com.android.billingclient.api.UnfetchedProduct;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -35,10 +33,12 @@ import java.util.Set;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import expo.modules.core.Promise;
-import expo.modules.core.arguments.MapArguments;
-import expo.modules.core.arguments.ReadableArguments;
-import expo.modules.core.interfaces.services.EventEmitter;
+import com.facebook.react.bridge.Promise;
+import com.facebook.react.bridge.ReadableMap;
+import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.bridge.WritableArray;
+import com.facebook.react.bridge.WritableNativeMap;
+import com.facebook.react.bridge.WritableNativeArray;
 
 /**
  * Handles all the interactions with Play Store (via Billing library), maintains connection to
@@ -59,13 +59,14 @@ public class BillingManager implements PurchasesUpdatedListener {
 
   protected static final HashMap<String, Promise> promises = new HashMap<>();
   private final List<Purchase> mPurchases = new ArrayList<>();
-  private final HashMap<String, SkuDetails> mSkuDetailsMap = new HashMap<>();
+  private final HashMap<String, ProductDetails> mProductDetailsMap = new HashMap<>();
+  private final HashMap<String, String> mProductOfferTokensMap = new HashMap<>();
+
   private BillingClient mBillingClient;
-  private EventEmitter mEventEmitter;
   private boolean mIsServiceConnected;
   private final Activity mActivity;
   private BillingUpdatesListener mBillingUpdatesListener;
-
+  private InAppPurchasesModule mInAppPurchasesModule;
   private Set<String> mTokensToBeConsumed;
 
   /**
@@ -80,21 +81,21 @@ public class BillingManager implements PurchasesUpdatedListener {
     void onPurchasesUpdated(List<Purchase> purchases);
   }
 
-  /**
-   * Listener for the Billing client state to become connected
-   */
-  public interface ServiceConnectedListener {
-    void onServiceConnected(BillingResult resultCode);
-  }
-
-  public BillingManager(Activity activity, EventEmitter eventEmitter) {
+  public BillingManager(Activity activity, InAppPurchasesModule inAppPurchasesModule) {
     mActivity = activity;
-    mEventEmitter = eventEmitter;
-    mBillingUpdatesListener = new UpdateListener(eventEmitter);
+    mInAppPurchasesModule = inAppPurchasesModule;
+    mBillingUpdatesListener = new UpdateListener(inAppPurchasesModule);
+
     mBillingClient =
       BillingClient
         .newBuilder(activity)
-        .enablePendingPurchases()
+        .enablePendingPurchases(
+          PendingPurchasesParams.newBuilder()
+          .enableOneTimeProducts()
+          .enablePrepaidPlans()
+          .build()
+        )
+        .enableAutoServiceReconnection()
         .setListener(this)
         .build();
   }
@@ -116,7 +117,7 @@ public class BillingManager implements PurchasesUpdatedListener {
   public void startServiceConnection(final Runnable executeOnSuccess) {
     mBillingClient.startConnection(new BillingClientStateListener() {
       @Override
-      public void onBillingSetupFinished(BillingResult billingResult) {
+      public void onBillingSetupFinished(@NonNull BillingResult billingResult) {
         final int responseCode = billingResult.getResponseCode();
         if (responseCode == BillingResponseCode.OK) {
           mIsServiceConnected = true;
@@ -137,30 +138,36 @@ public class BillingManager implements PurchasesUpdatedListener {
   /**
    * Start a purchase or subscription replace flow
    */
-  public void purchaseItemAsync(final String skuId, @Nullable final ReadableArguments details, final Promise promise) {
-    ReadableArguments d = details != null ? details : new MapArguments();
-    String oldPurchaseToken = d.getString("oldPurchaseToken");
-    ReadableArguments accountIdentifiers = d.getArguments("accountIdentifiers");
-    Boolean isVrPurchaseFlow = d.getBoolean("isVrPurchaseFlow");
+  public void purchaseItemAsync(final String productId, @Nullable final ReadableMap details, final Promise promise) {
+    String oldPurchaseToken = details != null ? details.getString("oldPurchaseToken") : null;
+    ReadableMap accountIdentifiers = details != null ? details.getMap("accountIdentifiers") : null;
 
     Runnable purchaseFlowRequest = new Runnable() {
       @Override
       public void run() {
-        SkuDetails skuDetails = mSkuDetailsMap.get(skuId);
-        if (skuDetails == null) {
+        ProductDetails productDetails = mProductDetailsMap.get(productId);
+        if (productDetails == null) {
           promise.reject("E_ITEM_NOT_QUERIED", "Must query item from store before calling purchase");
           return;
         }
 
-        BillingFlowParams.Builder purchaseParams = BillingFlowParams.newBuilder().setSkuDetails(skuDetails);
+        BillingFlowParams.ProductDetailsParams.Builder productDetailsParams = BillingFlowParams.ProductDetailsParams.newBuilder().setProductDetails(productDetails);
+        if(mProductOfferTokensMap.containsKey(productId)) {
+          productDetailsParams.setOfferToken(mProductOfferTokensMap.get(productId));
+        }
+
+        java.util.List<BillingFlowParams.ProductDetailsParams> productDetailsParamsList = new ArrayList<>();
+        productDetailsParamsList.add(productDetailsParams.build());
+
+        BillingFlowParams.Builder purchaseParams = BillingFlowParams.newBuilder().setProductDetailsParamsList(productDetailsParamsList);
 
         if (oldPurchaseToken != null) {
           purchaseParams.setSubscriptionUpdateParams(
-            BillingFlowParams.SubscriptionUpdateParams.newBuilder().setOldSkuPurchaseToken(oldPurchaseToken).build()
+            BillingFlowParams.SubscriptionUpdateParams.newBuilder().setOldPurchaseToken(oldPurchaseToken).build()
           );
         }
 
-        /**
+        /*
          * For Android billing to work without a 'Something went wrong on our end. Please try again.'
          * error, we must provide BOTH obfuscatedAccountId and obfuscatedProfileId.
          */
@@ -172,9 +179,6 @@ public class BillingManager implements PurchasesUpdatedListener {
             purchaseParams.setObfuscatedProfileId(obfuscatedProfileId);
           }
         }
-
-        // false will be the default, unless true is passed
-        purchaseParams.setVrPurchaseFlow(isVrPurchaseFlow);
 
         mBillingClient.launchBillingFlow(mActivity, purchaseParams.build());
       }
@@ -198,18 +202,15 @@ public class BillingManager implements PurchasesUpdatedListener {
       }
       mBillingUpdatesListener.onPurchasesUpdated(mPurchases);
     } else {
-      Bundle response = formatResponse(result, null);
-      mEventEmitter.emit(PURCHASES_UPDATED_EVENT, response);
+      mInAppPurchasesModule.emit(PURCHASES_UPDATED_EVENT, formatResponseToWritableMap(result, null));
     }
   }
 
   public void acknowledgePurchaseAsync(String purchaseToken, final Promise promise) {
     AcknowledgePurchaseResponseListener acknowledgePurchaseResponseListener = new AcknowledgePurchaseResponseListener() {
       @Override
-      public void onAcknowledgePurchaseResponse(BillingResult billingResult) {
-        Bundle response = formatResponse(billingResult, null);
-
-        promise.resolve(response);
+      public void onAcknowledgePurchaseResponse(@NonNull BillingResult billingResult) {
+        promise.resolve(formatResponseToWritableMap(billingResult, null));
       }
     };
 
@@ -227,7 +228,7 @@ public class BillingManager implements PurchasesUpdatedListener {
     if (mTokensToBeConsumed == null) {
       mTokensToBeConsumed = new HashSet<>();
     } else if (mTokensToBeConsumed.contains(purchaseToken)) {
-      Bundle response = new Bundle();
+      WritableMap response = new WritableNativeMap();
       response.putInt("responseCode", BillingClient.BillingResponseCode.OK);
       promise.resolve(response);
       return;
@@ -243,7 +244,7 @@ public class BillingManager implements PurchasesUpdatedListener {
     // Generating Consume Response listener
     final ConsumeResponseListener onConsumeListener = new ConsumeResponseListener() {
       @Override
-      public void onConsumeResponse(BillingResult billingResult, String purchaseToken) {
+      public void onConsumeResponse(@NonNull BillingResult billingResult, @NonNull String purchaseToken) {
         // If billing service was disconnected, we try to reconnect 1 time
         mBillingUpdatesListener.onConsumeFinished(purchaseToken, billingResult);
       }
@@ -290,111 +291,39 @@ public class BillingManager implements PurchasesUpdatedListener {
     Runnable queryToExecute = new Runnable() {
       @Override
       public void run() {
-        final Set<String> ALL_QUERIES = new HashSet(Arrays.asList(SkuType.INAPP, SkuType.SUBS));
         List<Purchase> purchases = new ArrayList<>();
-        Set<String> completedQueries = new HashSet();
-        Set<BillingResult> billingResults = new HashSet();
 
-        mBillingClient.queryPurchasesAsync(SkuType.INAPP, new PurchasesResponseListener() {
-          @Override
-          public void onQueryPurchasesResponse(@NonNull BillingResult billingResult, @NonNull List<Purchase> inAppPurchases) {
-            if (billingResult.getResponseCode() == BillingResponseCode.OK) {
-              purchases.addAll(inAppPurchases);
-            }
-            billingResults.add(billingResult);
-            completedQueries.add(SkuType.INAPP);
-            if (completedQueries.containsAll(ALL_QUERIES) || !areSubscriptionsSupported()) {
-              onQueryPurchasesFinished(aggregateBillingResults(billingResults), purchases, promise);
-            }
+        mBillingClient.queryPurchasesAsync(QueryPurchasesParams.newBuilder().setProductType(ProductType.INAPP).build(), (billingResult, inappResponse) -> {
+          if (billingResult.getResponseCode() == BillingResponseCode.OK) {
+            purchases.addAll(inappResponse);
           }
+
+          mBillingClient.queryPurchasesAsync(QueryPurchasesParams.newBuilder().setProductType(ProductType.SUBS).build(), (billingResult1, subsResponse) -> {
+            if (billingResult1.getResponseCode() == BillingResponseCode.OK) {
+              purchases.addAll(subsResponse);
+            }
+
+            onQueryPurchasesFinished(billingResult1, purchases, promise);
+          });
         });
-
-        if (areSubscriptionsSupported()) {
-          mBillingClient.queryPurchasesAsync(SkuType.SUBS, new PurchasesResponseListener() {
-            @Override
-            public void onQueryPurchasesResponse(@NonNull BillingResult billingResult, @NonNull List<Purchase> subscriptionPurchases) {
-              if (billingResult.getResponseCode() == BillingResponseCode.OK) {
-                purchases.addAll(subscriptionPurchases);
-              }
-              billingResults.add(billingResult);
-              completedQueries.add(SkuType.SUBS);
-              if (completedQueries.containsAll(ALL_QUERIES)) {
-                onQueryPurchasesFinished(aggregateBillingResults(billingResults), purchases, promise);
-              }
-            }
-          });
-        }
       }
     };
 
     executeServiceRequest(queryToExecute);
   }
 
-  @NonNull
-  private BillingResult aggregateBillingResults(@NonNull Set<BillingResult> billingResults) {
-    for (BillingResult result: billingResults) {
-      if (result.getResponseCode() != BillingResponseCode.OK) {
-        return result;
-      }
-    }
-    return billingResults.iterator().next();
-  }
-
-  /**
-   * Does the same thing as queryPurchases except makes a network request (instead of using Google Play cache)
-   * and returns all records for every SKU of a given type, even if they're expired/consumed
-   */
-  public void queryPurchaseHistoryAsync(final Promise promise) {
-    Runnable queryToExecute = new Runnable() {
-      @Override
-      public void run() {
-        final ArrayList<Bundle> bundles = new ArrayList<>();
-
-        // Query in app product history
-        mBillingClient.queryPurchaseHistoryAsync(SkuType.INAPP,
-          new PurchaseHistoryResponseListener() {
-            @Override
-            public void onPurchaseHistoryResponse(final BillingResult inAppBillingResult,
-                                                  final List<PurchaseHistoryRecord> inAppList) {
-
-              if (inAppBillingResult.getResponseCode() == BillingResponseCode.OK && inAppList != null) {
-                for (PurchaseHistoryRecord purchaseHistory : inAppList) {
-                  bundles.add(purchaseHistoryToBundle(purchaseHistory));
-                }
-              }
-
-              // Query subscription history
-              mBillingClient.queryPurchaseHistoryAsync(SkuType.SUBS, new PurchaseHistoryResponseListener() {
-                @Override
-                public void onPurchaseHistoryResponse(BillingResult subsBillingResult, List<PurchaseHistoryRecord> subsList) {
-
-                  if (subsBillingResult.getResponseCode() == BillingResponseCode.OK && subsList != null) {
-                    for (PurchaseHistoryRecord purchaseHistory : subsList) {
-                      bundles.add(purchaseHistoryToBundle(purchaseHistory));
-                    }
-                  }
-
-                  Bundle response = formatResponse(inAppBillingResult, bundles);
-                  promise.resolve(response);
-                }
-              });
-            }
-          });
-      }
-    };
-
-    executeServiceRequest(queryToExecute);
-  }
-
-  /**
-   * Format the result of a Purchase or Sku Details query depending on the result code
-   */
-  public static Bundle formatResponse(BillingResult billingResult, ArrayList<? extends Parcelable> results) {
-    Bundle response = new Bundle();
+  public static WritableMap formatResponseToWritableMap(BillingResult billingResult, ArrayList<WritableMap> results) {
+    WritableMap response = new WritableNativeMap();
     int responseCode = billingResult.getResponseCode();
     if (responseCode == BillingResponseCode.OK) {
       response.putInt("responseCode", OK);
-      response.putParcelableArrayList("results", results != null ? results : new ArrayList<Parcelable>());
+      WritableArray resultsArray = new WritableNativeArray();
+      if(results != null) {
+        for(WritableMap result : results) {
+          resultsArray.pushMap(result);
+        }
+      }
+      response.putArray("results", resultsArray);
     } else if (responseCode == BillingResponseCode.USER_CANCELED) {
       response.putInt("responseCode", USER_CANCELED);
     } else {
@@ -404,31 +333,34 @@ public class BillingManager implements PurchasesUpdatedListener {
     return response;
   }
 
+
   /**
    * Convert native error code to match corresponding TS enum
    */
   private static int errorCodeNativeToJS(int responseCode) {
     switch (responseCode) {
       case BillingResponseCode.ERROR:
-        return 0;
+        return 0; // UNKNOWN
       case BillingResponseCode.FEATURE_NOT_SUPPORTED:
-        return 1;
+        return 1; // PAYMENT_INVALID
       case BillingResponseCode.SERVICE_DISCONNECTED:
-        return 2;
+        return 2; // SERVICE_DISCONNECTED
       case BillingResponseCode.SERVICE_UNAVAILABLE:
-        return 3;
-      case BillingResponseCode.SERVICE_TIMEOUT:
-        return 4;
+        return 3; // SERVICE_UNAVAILABLE
       case BillingResponseCode.BILLING_UNAVAILABLE:
-        return 5;
+        return 5; // BILLING_UNAVAILABLE
       case BillingResponseCode.ITEM_UNAVAILABLE:
-        return 6;
+        return 6; // ITEM_UNAVAILABLE
       case BillingResponseCode.DEVELOPER_ERROR:
-        return 7;
+        return 7; // DEVELOPER_ERROR
       case BillingResponseCode.ITEM_ALREADY_OWNED:
-        return 8;
+        return 8; // ITEM_ALREADY_OWNED
       case BillingResponseCode.ITEM_NOT_OWNED:
-        return 9;
+        return 9; // ITEM_NOT_OWNED
+      case BillingResponseCode.NETWORK_ERROR:
+        return 10; // CLOUD_SERVICE
+      case BillingResponseCode.USER_CANCELED:
+        return 15; // USER_CANCELED
     }
     return 0;
   }
@@ -449,51 +381,68 @@ public class BillingManager implements PurchasesUpdatedListener {
 
   }
 
-  private static Bundle skuToBundle(SkuDetails skuDetails) {
-    Bundle bundle = new Bundle();
+  private static List<WritableMap> productToWritableMaps(ProductDetails productDetails) {
+    int type = productDetails.getProductType().equals(ProductType.INAPP) ? 0 : 1;
 
-    String subscriptionPeriod =
-      skuDetails.getType().equals(SkuType.SUBS) ?
-        skuDetails.getSubscriptionPeriod() :
-        INAPP_SUB_PERIOD;
+    List<WritableMap> ret = new ArrayList<>();
 
-    int type = skuDetails.getType().equals(SkuType.INAPP) ? 0 : 1;
+    WritableMap baseMap = new WritableNativeMap();
+    baseMap.putString("description", productDetails.getDescription());
+    baseMap.putString("title", productDetails.getTitle());
+    baseMap.putInt("type", type);
 
-    bundle.putString("description", skuDetails.getDescription());
-    bundle.putString("price", skuDetails.getPrice());
-    bundle.putLong("priceAmountMicros", skuDetails.getPriceAmountMicros());
-    bundle.putString("priceCurrencyCode", skuDetails.getPriceCurrencyCode());
-    bundle.putString("productId", skuDetails.getSku());
-    bundle.putString("title", skuDetails.getTitle());
-    bundle.putInt("type", type);
-    bundle.putString("subscriptionPeriod", subscriptionPeriod);
+    ProductDetails.OneTimePurchaseOfferDetails ofd = productDetails.getOneTimePurchaseOfferDetails();
+    List<ProductDetails.SubscriptionOfferDetails> offerList = productDetails.getSubscriptionOfferDetails();
 
-    return bundle;
+    if(productDetails.getProductType().equals(ProductType.INAPP) && ofd != null) {
+      // one-time purchase - single productId
+      WritableMap map = new WritableNativeMap();
+      map.merge(baseMap);
+      map.putString("productId", productDetails.getProductId());
+      map.putString("subscriptionPeriod", INAPP_SUB_PERIOD);
+      map.putString("price", ofd.getFormattedPrice());
+      map.putDouble("priceAmountMicros", ofd.getPriceAmountMicros());
+      map.putString("priceCurrencyCode", ofd.getPriceCurrencyCode());
+      ret.add(map);
+
+    } else if(productDetails.getProductType().equals(ProductType.SUBS) && offerList != null) {
+      // subscription - single ProductId, multiple offerTokens / offerIds
+      for (ProductDetails.SubscriptionOfferDetails offer : offerList) {
+        WritableMap map = new WritableNativeMap();
+        map.merge(baseMap);
+
+        map.putString("productId", productDetails.getProductId());
+        map.putString("offerToken", offer.getOfferToken());
+        map.putString("offerId", offer.getOfferId());
+
+        List<ProductDetails.PricingPhase> phases = offer.getPricingPhases().getPricingPhaseList();
+        ProductDetails.PricingPhase phase = phases.get(0);
+
+        map.putString("subscriptionPeriod", phase.getBillingPeriod());
+        map.putString("price", phase.getFormattedPrice());
+        map.putDouble("priceAmountMicros", phase.getPriceAmountMicros());
+        map.putString("priceCurrencyCode", phase.getPriceCurrencyCode());
+        map.putInt("recurrenceMode", phase.getRecurrenceMode());
+
+        ret.add(map);
+      }
+    }
+
+    return ret;
   }
 
-  public static Bundle purchaseToBundle(Purchase purchase) {
-    Bundle bundle = new Bundle();
+  public static WritableMap purchaseToWritableMap(Purchase purchase) {
+    WritableMap writableMap = new WritableNativeMap();
 
-    bundle.putBoolean("acknowledged", purchase.isAcknowledged());
-    bundle.putString("orderId", purchase.getOrderId());
-    bundle.putString("productId", purchase.getSkus().get(0));
-    bundle.putInt("purchaseState", purchaseStateNativeToJS(purchase.getPurchaseState()));
-    bundle.putLong("purchaseTime", purchase.getPurchaseTime());
-    bundle.putString("packageName", purchase.getPackageName());
-    bundle.putString("purchaseToken", purchase.getPurchaseToken());
+    writableMap.putBoolean("acknowledged", purchase.isAcknowledged());
+    writableMap.putString("orderId", purchase.getOrderId());
+    writableMap.putString("productId", purchase.getProducts().get(0));
+    writableMap.putInt("purchaseState", purchaseStateNativeToJS(purchase.getPurchaseState()));
+    writableMap.putDouble("purchaseTime", purchase.getPurchaseTime());
+    writableMap.putString("packageName", purchase.getPackageName());
+    writableMap.putString("purchaseToken", purchase.getPurchaseToken());
 
-    return bundle;
-  }
-
-  private static Bundle purchaseHistoryToBundle(PurchaseHistoryRecord purchaseRecord) {
-    Bundle bundle = new Bundle();
-
-    // PurchaseHistoryRecord is a subset of Purchase
-    bundle.putString("productId", purchaseRecord.getSkus().get(0));
-    bundle.putLong("purchaseTime", purchaseRecord.getPurchaseTime());
-    bundle.putString("purchaseToken", purchaseRecord.getPurchaseToken());
-
-    return bundle;
+    return writableMap;
   }
 
   /**
@@ -506,47 +455,89 @@ public class BillingManager implements PurchasesUpdatedListener {
       return;
     }
 
-    ArrayList<Bundle> results = new ArrayList<>();
+    ArrayList<WritableMap> results = new ArrayList<>();
     for (Purchase purchase : purchasesList) {
-      results.add(purchaseToBundle(purchase));
+      results.add(purchaseToWritableMap(purchase));
     }
 
     // Update purchases inventory with new list of purchases
     mPurchases.clear();
     onPurchasesUpdated(billingResult, purchasesList);
 
-    final Bundle response = formatResponse(billingResult, results);
-    promise.resolve(response);
+    Log.d(TAG, "onQueryPurchasesFinished RESOLVE: " + results.size());
+    promise.resolve(formatResponseToWritableMap(billingResult, results));
   }
 
-  public void querySkuDetailsAsync(final List<String> skuList,
-                                   final SkuDetailsResponseListener listener) {
+  @NonNull private BillingResult aggregateBillingResults(@NonNull Set<BillingResult> billingResults) {
+    for (BillingResult result: billingResults) {
+      if (result.getResponseCode() != BillingResponseCode.OK) {
+        return result;
+        }
+      }
+    return billingResults.iterator().next();
+  }
+
+  public void queryProductDetailsAsync(final List<String> skuList,
+                                       final ProductDetailsResponseListener listener) {
     // Creating a runnable from the request to use it inside our connection retry policy below
     Runnable queryRequest = new Runnable() {
       @Override
       public void run() {
-        // Query in app product details
-        SkuDetailsParams.Builder params = SkuDetailsParams.newBuilder();
-        params.setSkusList(skuList).setType(SkuType.INAPP);
-        mBillingClient.querySkuDetailsAsync(params.build(),
-          new SkuDetailsResponseListener() {
-            @Override
-            public void onSkuDetailsResponse(BillingResult inAppResult,
-                                             final List<SkuDetails> skuDetails) {
-              // Query subscription details
-              SkuDetailsParams.Builder subs = SkuDetailsParams.newBuilder();
-              subs.setSkusList(skuList).setType(SkuType.SUBS);
-              mBillingClient.querySkuDetailsAsync(subs.build(), new SkuDetailsResponseListener() {
-                @Override
-                public void onSkuDetailsResponse(BillingResult billingResult, List<SkuDetails> subscriptionDetails) {
-                  if (skuDetails != null && subscriptionDetails != null) {
-                    skuDetails.addAll(subscriptionDetails);
-                  }
-                  listener.onSkuDetailsResponse(billingResult, skuDetails);
+        // get the set of unique product IDs referenced in skuList
+
+        // note: queryProductDetailsAsync() requires all products to be of the same type
+        // so we make two calls, one for INAPP items and one for SUBS items
+        // assuming we can't tell which is which just based on the skuList, we crudely attempt to query both types for each SKU
+
+        Set<String> inappProductIds = new HashSet<>();
+        Set<String> subsProductIds = new HashSet<>();
+
+        for(String skuId : skuList) {
+          if(true) {
+            subsProductIds.add(skuId);
+          }
+          if(true) {
+            inappProductIds.add(skuId);
+          }
+        }
+
+        List<QueryProductDetailsParams.Product> inappProductList = new ArrayList<>();
+        List<QueryProductDetailsParams.Product> subsProductList = new ArrayList<>();
+
+        for(String productId : inappProductIds) {
+          inappProductList.add(QueryProductDetailsParams.Product.newBuilder().setProductId(productId).setProductType(ProductType.INAPP).build());
+        }
+        for(String productId : subsProductIds) {
+          subsProductList.add(QueryProductDetailsParams.Product.newBuilder().setProductId(productId).setProductType(ProductType.SUBS).build());
+        }
+
+        Set<BillingResult> results = new HashSet<>();
+        List<ProductDetails> allProducts = new ArrayList<>();
+        List<UnfetchedProduct> allUnfetchedProducts = new ArrayList<>();
+
+        mBillingClient.queryProductDetailsAsync(QueryProductDetailsParams.newBuilder().setProductList(inappProductList).build(),
+                (inappResult, inappProductDetails) -> {
+
+                if(inappResult.getResponseCode() == BillingResponseCode.OK) {
+                  allProducts.addAll(inappProductDetails.getProductDetailsList());
+                  allUnfetchedProducts.addAll(inappProductDetails.getUnfetchedProductList());
                 }
-              });
-            }
-          });
+                results.add(inappResult);
+
+                mBillingClient.queryProductDetailsAsync(QueryProductDetailsParams.newBuilder().setProductList(subsProductList).build(),
+                          (subsResult, subsProductDetails) -> {
+                            if (subsResult.getResponseCode() == BillingResponseCode.OK) {
+                              allProducts.addAll(subsProductDetails.getProductDetailsList());
+                              allUnfetchedProducts.addAll(subsProductDetails.getUnfetchedProductList());
+                            }
+                            results.add(subsResult);
+
+                            listener.onProductDetailsResponse(
+                              aggregateBillingResults(results),
+                              QueryProductDetailsResult.create(allProducts, allUnfetchedProducts)
+                            );
+                });
+        });
       }
     };
 
@@ -554,19 +545,25 @@ public class BillingManager implements PurchasesUpdatedListener {
   }
 
   public void queryPurchasableItems(List<String> itemList, final Promise promise) {
-    querySkuDetailsAsync(itemList,
-      new SkuDetailsResponseListener() {
+    queryProductDetailsAsync(itemList,
+      new ProductDetailsResponseListener() {
         @Override
-        public void onSkuDetailsResponse(BillingResult billingResult, List<SkuDetails> skuDetailsList) {
-          ArrayList<Bundle> results = new ArrayList<>();
-          if (skuDetailsList != null) {
-            for (SkuDetails skuDetails : skuDetailsList) {
-              mSkuDetailsMap.put(skuDetails.getSku(), skuDetails);
-              results.add(skuToBundle(skuDetails));
+        public void onProductDetailsResponse(@NonNull BillingResult billingResult, @NonNull QueryProductDetailsResult productDetailsResult) {
+          ArrayList<WritableMap> results = new ArrayList<>();
+          for (ProductDetails productDetails : productDetailsResult.getProductDetailsList()) {
+            mProductDetailsMap.put(productDetails.getProductId(), productDetails);
+            if(productDetails.getSubscriptionOfferDetails() != null) {
+              // add the first offerToken to the map
+              List<ProductDetails.SubscriptionOfferDetails> details = productDetails.getSubscriptionOfferDetails();
+              for(ProductDetails.SubscriptionOfferDetails offer : details) {
+                mProductOfferTokensMap.put(productDetails.getProductId(), offer.getOfferToken());
+                break;
+              }
             }
+            results.addAll(productToWritableMaps(productDetails));
           }
-          Bundle response = formatResponse(billingResult, results);
-          promise.resolve(response);
+          Log.d(TAG, "queryPurchasableItems " + itemList.size() + " RESOLVE: " + results.size());
+          promise.resolve(formatResponseToWritableMap(billingResult, results));
         }
       }
     );
@@ -579,14 +576,6 @@ public class BillingManager implements PurchasesUpdatedListener {
       // If billing service was disconnected, we try to reconnect 1 time.
       startServiceConnection(runnable);
     }
-  }
-
-  /**
-   * Checks if subscriptions are supported for current client
-   */
-  public boolean areSubscriptionsSupported() {
-    BillingResult billingResult = mBillingClient.isFeatureSupported(FeatureType.SUBSCRIPTIONS);
-    return billingResult.getResponseCode() == BillingResponseCode.OK;
   }
 
   /**
