@@ -13,8 +13,8 @@ Pod::Spec.new do |s|
   s.platform       = :ios, '13.0'
   s.source         = { git: 'https://github.com/expo/expo.git' }
   s.static_framework = true
-  s.source_files   = 'EXInAppPurchases/**/*.{h,m}'
-  s.preserve_paths = 'EXInAppPurchases/**/*.{h,m}'
+  s.source_files   = 'ios/EXInAppPurchases/**/*.{h,m}'
+  s.preserve_paths = 'ios/EXInAppPurchases/**/*.{h,m}'
   s.requires_arc   = true
 
   s.dependency 'React'
