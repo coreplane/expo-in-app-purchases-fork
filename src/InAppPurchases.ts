@@ -1,5 +1,5 @@
-import { CodedError, Subscription } from 'expo-modules-core';
-import { Platform, NativeEventEmitter } from 'react-native';
+import { CodedError } from 'expo-modules-core';
+import { Platform, NativeEventEmitter, EmitterSubscription } from 'react-native';
 
 import ExpoInAppPurchases from './ExpoInAppPurchases';
 import {
@@ -38,7 +38,7 @@ const PURCHASES_UPDATED_EVENT = 'Expo.purchasesUpdated';
 const eventEmitter = new NativeEventEmitter(ExpoInAppPurchases);
 
 let connected = false;
-let purchaseUpdatedSubscription: Subscription;
+let purchaseUpdatedSubscription: EmitterSubscription;
 
 // @needsAudit
 /**
