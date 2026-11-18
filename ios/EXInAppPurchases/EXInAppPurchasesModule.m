@@ -146,11 +146,18 @@ RCT_EXPORT_METHOD(disconnectAsync:(RCTPromiseResolveBlock)resolve rejecter:(RCTP
 
   for (SKPaymentTransaction *transaction in queue.transactions) {
     SKPaymentTransactionState transactionState = transaction.transactionState;
-    if (transactionState == SKPaymentTransactionStateRestored || transactionState == SKPaymentTransactionStatePurchased) {
+    if (transactionState == SKPaymentTransactionStateRestored) {
       NSDictionary * transactionData = [self getTransactionData:transaction acknowledged:YES];
       [results addObject:transactionData];
 
       [[SKPaymentQueue defaultQueue] finishTransaction:transaction];
+    } else if (transactionState == SKPaymentTransactionStatePurchased) {
+      // A "Purchased" transaction still in the queue has NOT been confirmed by the app yet
+      // (e.g. the server confirm failed). Do not finish it here, or the purchase would be lost.
+      // Report it as unacknowledged, and keep it so JS can finishTransactionAsync() it after confirming.
+      _pendingTransactions[transaction.transactionIdentifier] = transaction;
+      NSDictionary * transactionData = [self getTransactionData:transaction acknowledged:NO];
+      [results addObject:transactionData];
     }
   }
 
